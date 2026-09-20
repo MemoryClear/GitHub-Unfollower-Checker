@@ -15,6 +15,9 @@ GitHub Unfollower Checker
 白名单: 在脚本目录下的 whitelist.txt 中一行写一个用户名，
 这些用户不会出现在 Unfollowers/Fans 列表中，也不会被一键回关/一键取关处理。
 
+黑名单: --unfollow 取关成功的用户会自动写入 blacklist.txt（防止被"骗关注"），
+以后 --follow-back 不会回关黑名单中的用户。用 --no-blacklist 可关闭自动写入。
+
 在 .env 文件中设置 GITHUB_TOKEN，或直接设置环境变量。
 零外部依赖，仅使用 Python 标准库。
 """
@@ -70,33 +73,62 @@ def load_dotenv(env_path: Path):
             os.environ.setdefault(key, value)
 
 
-# ─── Whitelist ────────────────────────────────────────────────────────────────
+# ─── User Lists (Whitelist / Blacklist) ───────────────────────────────────────
 
-def whitelist_key(login: str) -> str:
-    """白名单匹配键：去掉 @ 前缀并转小写（GitHub 用户名不区分大小写）。"""
+def username_key(login: str) -> str:
+    """名单匹配键：去掉 @ 前缀并转小写（GitHub 用户名不区分大小写）。"""
     return login.lstrip("@").lower()
 
 
-def load_whitelist(whitelist_path: Path, extra_users: list[str] | None = None) -> set[str]:
+def load_usernames(list_path: Path, extra_users: list[str] | None = None) -> set[str]:
     """
-    读取白名单用户名集合（全部转小写，GitHub 用户名不区分大小写）。
+    读取名单（白名单/黑名单通用）用户名集合。
     文件格式：一行一个用户名，可带 @ 前缀，# 开头或行中 # 之后为注释。
-    extra_users: 通过 --exclude-user 传入的临时白名单。
+    extra_users: 通过 --exclude-user 传入的临时名单。
     """
     names: set[str] = set()
 
-    if whitelist_path.exists():
-        for line in whitelist_path.read_text(encoding="utf-8").splitlines():
+    if list_path.exists():
+        for line in list_path.read_text(encoding="utf-8").splitlines():
             name = line.split("#", 1)[0].strip()
             if name:
-                names.add(whitelist_key(name))
+                names.add(username_key(name))
 
     for user in extra_users or []:
         name = user.strip()
         if name:
-            names.add(whitelist_key(name))
+            names.add(username_key(name))
 
     return names
+
+
+def add_to_blacklist(blacklist_path: Path, logins: list[str]) -> int:
+    """
+    把取关成功的用户追加进黑名单文件（自动去重，带日期注释，保留原有内容）。
+    返回新增人数。
+    """
+    existing = load_usernames(blacklist_path)
+    seen: set[str] = set()
+    new_names: list[str] = []
+    for login in logins:
+        key = username_key(login)
+        if key not in existing and key not in seen:
+            seen.add(key)
+            new_names.append(key)
+
+    if not new_names:
+        return 0
+
+    date = time.strftime("%Y-%m-%d")
+    is_new = not blacklist_path.exists()
+    with blacklist_path.open("a", encoding="utf-8") as f:
+        if is_new:
+            f.write("# 黑名单：这里列出的用户曾被 --unfollow 取关（骗取关注），\n")
+            f.write("# 以后 --follow-back 不会自动回关他们。\n")
+            f.write("# 格式：一行一个用户名，# 为注释。想恢复某人，删除或注释对应行即可。\n")
+        for name in new_names:
+            f.write(f"{name}  # {date} 取关后自动加入\n")
+    return len(new_names)
 
 
 # ─── GitHub API ───────────────────────────────────────────────────────────────
@@ -208,8 +240,9 @@ class ComparisonResult:
     following: list[dict]
     unfollowers: list[dict]   # 你关注了但没关注你的人（已剔除白名单）
     mutual: list[dict]        # 互相关注
-    fans: list[dict]          # 关注你但你没回关的人（已剔除白名单）
+    fans: list[dict]          # 关注你但你没回关的人（已剔除白名单/黑名单）
     whitelisted_hidden: list[dict] = field(default_factory=list)  # 被白名单隐藏的用户
+    blacklisted_hidden: list[dict] = field(default_factory=list)  # 被黑名单隐藏的用户
 
 
 def compare(followers: list[dict], following: list[dict], username: str) -> ComparisonResult:
@@ -285,6 +318,14 @@ def print_result(result: ComparisonResult):
         )
         print(f"  {DIM}🤍 白名单用户（不出现在 Unfollowers/Fans 列表，也不参与回关/取关）: {names}{RESET}")
 
+    # 黑名单提示
+    if result.blacklisted_hidden:
+        names = ", ".join(
+            f"@{u['login']}"
+            for u in sorted(result.blacklisted_hidden, key=lambda u: u["login"].lower())
+        )
+        print(f"  {DIM}🚫 黑名单用户（曾被取关/骗取关注，不出现在 Fans 列表，也不会被回关）: {names}{RESET}")
+
     # 取关你的人
     if result.unfollowers:
         print_table(
@@ -326,14 +367,15 @@ def confirm(prompt: str) -> bool:
         return False
 
 
-def batch_follow(api: GitHubAPI, users: list[dict], action: str):
+def batch_follow(api: GitHubAPI, users: list[dict], action: str) -> list[str]:
     """
     Batch follow/unfollow users with progress display.
     action: "follow" or "unfollow"
+    返回操作成功的用户名列表。
     """
     if not users:
         print(f"\n  {DIM}没有需要处理的用户。{RESET}")
-        return
+        return []
 
     verb = "关注" if action == "follow" else "取关"
     total = len(users)
@@ -342,6 +384,7 @@ def batch_follow(api: GitHubAPI, users: list[dict], action: str):
 
     success = 0
     failed = 0
+    success_logins: list[str] = []
 
     for i, user in enumerate(users, 1):
         login = user["login"]
@@ -356,6 +399,7 @@ def batch_follow(api: GitHubAPI, users: list[dict], action: str):
 
         if ok:
             success += 1
+            success_logins.append(login)
         else:
             failed += 1
 
@@ -371,6 +415,8 @@ def batch_follow(api: GitHubAPI, users: list[dict], action: str):
     print(f"{BOLD_CYAN}╰──────────────────────────────────────────╯{RESET}")
     print()
 
+    return success_logins
+
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -385,6 +431,7 @@ def main():
   python main.py --unfollow       一键取关所有 unfollowers
   python main.py -u <username>    查看指定用户
   python main.py --exclude-user octocat    把 @octocat 加入白名单（不显示也不处理）
+  python main.py --unfollow --no-blacklist 取关但不自动写入黑名单
         """,
     )
     parser.add_argument("-u", "--username", help="GitHub 用户名（默认用 token 对应的用户）")
@@ -403,6 +450,16 @@ def main():
         action="append",
         metavar="USERNAME",
         help="将指定用户加入白名单（可重复使用多次）",
+    )
+    parser.add_argument(
+        "--blacklist",
+        metavar="FILE",
+        help="黑名单文件路径（默认脚本目录下的 blacklist.txt；--follow-back 会跳过其中用户）",
+    )
+    parser.add_argument(
+        "--no-blacklist",
+        action="store_true",
+        help="--unfollow 时不自动把取关成功的用户写入黑名单",
     )
     args = parser.parse_args()
 
@@ -453,19 +510,33 @@ def main():
         whitelist_path = Path(args.whitelist) if args.whitelist else script_dir / "whitelist.txt"
         if args.whitelist and not whitelist_path.exists():
             print(f"⚠️  白名单文件不存在: {whitelist_path}")
-        whitelist = load_whitelist(whitelist_path, args.exclude_user)
+        whitelist = load_usernames(whitelist_path, args.exclude_user)
         if whitelist:
             result.whitelisted_hidden = [
                 u for u in result.unfollowers + result.fans
-                if whitelist_key(u["login"]) in whitelist
+                if username_key(u["login"]) in whitelist
             ]
             result.unfollowers = [
-                u for u in result.unfollowers if whitelist_key(u["login"]) not in whitelist
+                u for u in result.unfollowers if username_key(u["login"]) not in whitelist
             ]
             result.fans = [
-                u for u in result.fans if whitelist_key(u["login"]) not in whitelist
+                u for u in result.fans if username_key(u["login"]) not in whitelist
             ]
             print(f"  🤍 白名单已启用: 共 {len(whitelist)} 人，本次过滤 {len(result.whitelisted_hidden)} 人")
+
+        # ── 应用黑名单 ──
+        # 黑名单用户（--unfollow 自动写入或手动添加）不出现在 Fans 列表中，
+        # 也不会被 --follow-back 回关——防止"骗取关注"的人再次骗到回关
+        blacklist_path = Path(args.blacklist) if args.blacklist else script_dir / "blacklist.txt"
+        blacklist = load_usernames(blacklist_path)
+        if blacklist:
+            result.blacklisted_hidden = [
+                u for u in result.fans if username_key(u["login"]) in blacklist
+            ]
+            result.fans = [
+                u for u in result.fans if username_key(u["login"]) not in blacklist
+            ]
+            print(f"  🚫 黑名单已启用: 共 {len(blacklist)} 人，本次过滤 {len(result.blacklisted_hidden)} 个回关对象")
 
         # 显示对比结果
         print_result(result)
@@ -496,7 +567,14 @@ def main():
                     print(f"     {RED}@{user['login']}{RESET}")
 
                 if args.yes or confirm(f"\n  确认取关以上 {len(unfollowers)} 个用户？"):
-                    batch_follow(api, unfollowers, "unfollow")
+                    done = batch_follow(api, unfollowers, "unfollow")
+                    # 取关成功的用户自动写入黑名单，防止其以后再次"骗关注"
+                    if done and not args.no_blacklist:
+                        added = add_to_blacklist(blacklist_path, done)
+                        if added:
+                            print(f"  🚫 已将 {added} 个用户自动加入黑名单: {blacklist_path}")
+                            print(f"     以后 --follow-back 不会回关他们。")
+                            print(f"     不想启用此行为可加 --no-blacklist；想恢复某人，编辑该文件即可。\n")
                 else:
                     print(f"  {DIM}已取消。{RESET}")
 

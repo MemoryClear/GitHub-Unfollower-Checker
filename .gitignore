@@ -1,5 +1,6 @@
 .env
 whitelist.txt
+blacklist.txt
 __pycache__/
 *.pyc
 .venv/

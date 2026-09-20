@@ -1,0 +1,9 @@
+# 黑名单：这里列出的用户曾被 --unfollow 取关（或手动加入），视为"骗取关注"。
+# 以后 --follow-back 一键回关会自动跳过他们，他们也不会出现在 Fans 列表中。
+# 格式：一行一个用户名（可带 @），# 为注释。想恢复某人，删除或注释对应行即可。
+#
+# 运行 python main.py --unfollow 时，取关成功的用户会自动追加到这里。
+# 如不想自动写入，使用: python main.py --unfollow --no-blacklist
+#
+# 示例:
+# some-spammer  # 2026-01-01 取关后自动加入

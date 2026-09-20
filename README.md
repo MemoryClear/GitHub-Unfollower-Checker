@@ -13,6 +13,7 @@
 - 🔁 **一键回关**所有粉丝
 - 🚫 **一键取关**所有 unfollowers
 - 🤍 **白名单**：允许特定用户保持单向关注，不出现在 Unfollowers 列表，也不会被回关/取关
+- 🚫 **黑名单**：一键取关的用户自动拉黑，以后一键回关不会再回关他们（防止被"骗关注"）
 - ⚡ 自动检测 API 速率限制并保护
 - 🎨 彩色终端表格输出
 - 🚫 零外部依赖，仅使用 Python 标准库
@@ -97,6 +98,32 @@ python main.py --unfollow --exclude-user some-friend --exclude-user another-user
 python main.py --whitelist path/to/whitelist.txt
 ```
 
+### 4. 黑名单（防"骗关注"）
+
+有些用户先关注你、骗到你回关后又取关你。运行 `--unfollow` 时，**取关成功的用户会自动写入 `blacklist.txt`**（首次运行自动创建，带日期注释、自动去重）：
+
+```
+stranger  # 2026-09-20 取关后自动加入
+```
+
+之后即使这个人再来关注你：
+
+- 不出现在 **Fans** 列表
+- `--follow-back` **不会**回关他
+
+相关控制：
+
+```bash
+# 取关但不写入黑名单
+python main.py --unfollow --no-blacklist
+
+# 手动编辑黑名单恢复某人（删除或注释对应行即可）
+# 自定义黑名单路径
+python main.py --follow-back --blacklist path/to/blacklist.txt
+```
+
+也可以不经过取关、直接手动编辑 `blacklist.txt`（格式同白名单）来永久屏蔽某人。
+
 ## 📖 命令行参数
 
 | 参数 | 说明 |
@@ -109,6 +136,8 @@ python main.py --whitelist path/to/whitelist.txt
 | `--no-fans` | 不显示关注你但你没回关的用户列表 |
 | `--whitelist FILE` | 🤍 指定白名单文件路径（默认读取脚本目录下的 `whitelist.txt`） |
 | `--exclude-user USERNAME` | 🤍 临时将某个用户加入白名单，可重复使用 |
+| `--blacklist FILE` | 🚫 指定黑名单文件路径（默认读取脚本目录下的 `blacklist.txt`） |
+| `--no-blacklist` | 🚫 `--unfollow` 时不自动把取关用户写入黑名单 |
 
 ## 📊 输出示例
 
@@ -170,6 +199,8 @@ github-follower-diff/
 ├── .env                   # 你的配置（不要提交到 Git）
 ├── whitelist.txt.example  # 白名单模板
 ├── whitelist.txt          # 你的白名单（可选）
+├── blacklist.txt.example  # 黑名单模板
+├── blacklist.txt          # 你的黑名单（--unfollow 自动生成/追加）
 ├── .gitignore
 └── README.md
 ```
