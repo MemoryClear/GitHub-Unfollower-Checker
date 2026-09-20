@@ -10,6 +10,10 @@ GitHub Unfollower Checker
     python main.py --follow-back         # 一键回关所有粉丝
     python main.py --unfollow            # 一键取关所有 unfollowers
     python main.py -u <username>         # 查看指定用户
+    python main.py --exclude-user octocat  # 临时把某用户加入白名单
+
+白名单: 在脚本目录下的 whitelist.txt 中一行写一个用户名，
+这些用户不会出现在 Unfollowers/Fans 列表中，也不会被一键回关/一键取关处理。
 
 在 .env 文件中设置 GITHUB_TOKEN，或直接设置环境变量。
 零外部依赖，仅使用 Python 标准库。
@@ -22,7 +26,7 @@ import time
 import argparse
 import urllib.request
 import urllib.error
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -64,6 +68,35 @@ def load_dotenv(env_path: Path):
             key = key.strip()
             value = value.strip().strip("'\"")
             os.environ.setdefault(key, value)
+
+
+# ─── Whitelist ────────────────────────────────────────────────────────────────
+
+def whitelist_key(login: str) -> str:
+    """白名单匹配键：去掉 @ 前缀并转小写（GitHub 用户名不区分大小写）。"""
+    return login.lstrip("@").lower()
+
+
+def load_whitelist(whitelist_path: Path, extra_users: list[str] | None = None) -> set[str]:
+    """
+    读取白名单用户名集合（全部转小写，GitHub 用户名不区分大小写）。
+    文件格式：一行一个用户名，可带 @ 前缀，# 开头或行中 # 之后为注释。
+    extra_users: 通过 --exclude-user 传入的临时白名单。
+    """
+    names: set[str] = set()
+
+    if whitelist_path.exists():
+        for line in whitelist_path.read_text(encoding="utf-8").splitlines():
+            name = line.split("#", 1)[0].strip()
+            if name:
+                names.add(whitelist_key(name))
+
+    for user in extra_users or []:
+        name = user.strip()
+        if name:
+            names.add(whitelist_key(name))
+
+    return names
 
 
 # ─── GitHub API ───────────────────────────────────────────────────────────────
@@ -173,9 +206,10 @@ class ComparisonResult:
     username: str
     followers: list[dict]
     following: list[dict]
-    unfollowers: list[dict]   # 你关注了但没关注你的人
+    unfollowers: list[dict]   # 你关注了但没关注你的人（已剔除白名单）
     mutual: list[dict]        # 互相关注
-    fans: list[dict]          # 关注你但你没回关的人
+    fans: list[dict]          # 关注你但你没回关的人（已剔除白名单）
+    whitelisted_hidden: list[dict] = field(default_factory=list)  # 被白名单隐藏的用户
 
 
 def compare(followers: list[dict], following: list[dict], username: str) -> ComparisonResult:
@@ -242,6 +276,14 @@ def print_result(result: ComparisonResult):
     print(f"{BOLD_CYAN}│{RESET} {BOLD}🟢 Mutual follows:{RESET} {BOLD_GREEN}{len(result.mutual)}{RESET}")
     print(f"{BOLD_CYAN}│{RESET} {BOLD}🔵 Fans:{RESET} {BOLD_BLUE}{len(result.fans)}{RESET}")
     print(f"{BOLD_CYAN}╰─────────────────────────────────────────────────────╯{RESET}")
+
+    # 白名单提示
+    if result.whitelisted_hidden:
+        names = ", ".join(
+            f"@{u['login']}"
+            for u in sorted(result.whitelisted_hidden, key=lambda u: u["login"].lower())
+        )
+        print(f"  {DIM}🤍 白名单用户（不出现在 Unfollowers/Fans 列表，也不参与回关/取关）: {names}{RESET}")
 
     # 取关你的人
     if result.unfollowers:
@@ -342,6 +384,7 @@ def main():
   python main.py --follow-back    一键回关所有粉丝
   python main.py --unfollow       一键取关所有 unfollowers
   python main.py -u <username>    查看指定用户
+  python main.py --exclude-user octocat    把 @octocat 加入白名单（不显示也不处理）
         """,
     )
     parser.add_argument("-u", "--username", help="GitHub 用户名（默认用 token 对应的用户）")
@@ -350,6 +393,17 @@ def main():
     parser.add_argument("--no-mutual", action="store_true", help="不显示互相关注")
     parser.add_argument("--no-fans", action="store_true", help="不显示粉丝")
     parser.add_argument("-y", "--yes", action="store_true", help="跳过确认提示，直接执行")
+    parser.add_argument(
+        "--whitelist",
+        metavar="FILE",
+        help="白名单文件路径（默认读取脚本目录下的 whitelist.txt，一行一个用户名，# 为注释）",
+    )
+    parser.add_argument(
+        "--exclude-user",
+        action="append",
+        metavar="USERNAME",
+        help="将指定用户加入白名单（可重复使用多次）",
+    )
     args = parser.parse_args()
 
     # 加载配置
@@ -393,6 +447,25 @@ def main():
             result.mutual = []
         if args.no_fans:
             result.fans = []
+
+        # ── 应用白名单 ──
+        # 白名单用户不出现在 Unfollowers/Fans 列表中，也不会被回关/取关
+        whitelist_path = Path(args.whitelist) if args.whitelist else script_dir / "whitelist.txt"
+        if args.whitelist and not whitelist_path.exists():
+            print(f"⚠️  白名单文件不存在: {whitelist_path}")
+        whitelist = load_whitelist(whitelist_path, args.exclude_user)
+        if whitelist:
+            result.whitelisted_hidden = [
+                u for u in result.unfollowers + result.fans
+                if whitelist_key(u["login"]) in whitelist
+            ]
+            result.unfollowers = [
+                u for u in result.unfollowers if whitelist_key(u["login"]) not in whitelist
+            ]
+            result.fans = [
+                u for u in result.fans if whitelist_key(u["login"]) not in whitelist
+            ]
+            print(f"  🤍 白名单已启用: 共 {len(whitelist)} 人，本次过滤 {len(result.whitelisted_hidden)} 人")
 
         # 显示对比结果
         print_result(result)

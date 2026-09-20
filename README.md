@@ -12,6 +12,7 @@
 - 🟢 列出**互相关注**的用户
 - 🔁 **一键回关**所有粉丝
 - 🚫 **一键取关**所有 unfollowers
+- 🤍 **白名单**：允许特定用户保持单向关注，不出现在 Unfollowers 列表，也不会被回关/取关
 - ⚡ 自动检测 API 速率限制并保护
 - 🎨 彩色终端表格输出
 - 🚫 零外部依赖，仅使用 Python 标准库
@@ -63,6 +64,39 @@ python main.py --unfollow -y
 python main.py -u <username>
 ```
 
+### 3. 白名单（可选）
+
+有几个用户是你**单方面关注**、不想被列进 "Unfollowers" 也不想被取关/回关的？把它们加入白名单：
+
+```bash
+cp whitelist.txt.example whitelist.txt
+```
+
+编辑 `whitelist.txt`，一行一个用户名（可带 `@`，`#` 为注释）：
+
+```
+some-friend
+@another-user   # 允许我对他单向关注
+```
+
+程序会自动读取脚本目录下的 `whitelist.txt`。白名单中的用户：
+
+- 不出现在 **Unfollowers** 和 **Fans** 列表中
+- 不会被 `--follow-back` 回关，也不会被 `--unfollow` 取关
+
+临时白名单（不写文件）：
+
+```bash
+# 可重复使用 --exclude-user
+python main.py --unfollow --exclude-user some-friend --exclude-user another-user
+```
+
+自定义白名单文件路径：
+
+```bash
+python main.py --whitelist path/to/whitelist.txt
+```
+
 ## 📖 命令行参数
 
 | 参数 | 说明 |
@@ -73,6 +107,8 @@ python main.py -u <username>
 | `-y`, `--yes` | 跳过确认提示，直接执行批量操作 |
 | `--no-mutual` | 不显示互相关注的用户列表 |
 | `--no-fans` | 不显示关注你但你没回关的用户列表 |
+| `--whitelist FILE` | 🤍 指定白名单文件路径（默认读取脚本目录下的 `whitelist.txt`） |
+| `--exclude-user USERNAME` | 🤍 临时将某个用户加入白名单，可重复使用 |
 
 ## 📊 输出示例
 
@@ -129,9 +165,11 @@ python main.py -u <username>
 
 ```
 github-follower-diff/
-├── main.py            # 主程序（单文件，包含所有代码）
-├── .env.example       # 环境变量模板
-├── .env               # 你的配置（不要提交到 Git）
+├── main.py                # 主程序（单文件，包含所有代码）
+├── .env.example           # 环境变量模板
+├── .env                   # 你的配置（不要提交到 Git）
+├── whitelist.txt.example  # 白名单模板
+├── whitelist.txt          # 你的白名单（可选）
 ├── .gitignore
 └── README.md
 ```

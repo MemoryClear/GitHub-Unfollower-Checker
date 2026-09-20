@@ -1,0 +1,9 @@
+# 白名单：一行一个 GitHub 用户名（可带 @ 前缀），# 开头为注释。
+# 这里的用户：
+#   1. 不会出现在 "Unfollowers（我关注但未关注我）" 和 "Fans" 列表中
+#   2. 不会被 --follow-back 回关，也不会被 --unfollow 取关
+# 复制本文件为 whitelist.txt 后即自动生效，无需其他参数。
+#
+# 示例:
+# some-friend
+# @another-user   # 行尾注释也可以
