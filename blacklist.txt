@@ -5,8 +5,8 @@
 # 运行 python main.py --unfollow 时，取关成功的用户会自动追加到这里。
 # 如不想自动写入，使用: python main.py --unfollow --no-blacklist
 #
-# 《GitHub Actions 会自动提交本文件》：follow-sync workflow 每轮跑完会把它
-# push 回仓库，否则 runner 销毁后这份数据就丢了。
-#
 # 示例:
 # some-spammer  # 2026-01-01 取关后自动加入
+hamse122  # 2026-09-21 取关后自动加入
+shekibhaidari  # 2026-09-21 取关后自动加入
+algorithmalchemy  # 2026-09-23 取关后自动加入
