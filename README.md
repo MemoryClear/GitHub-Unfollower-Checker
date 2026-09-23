@@ -14,6 +14,7 @@
 - 🚫 **一键取关**所有 unfollowers
 - 🤍 **白名单**：允许特定用户保持单向关注，不出现在 Unfollowers 列表，也不会被回关/取关
 - 🚫 **黑名单**：一键取关的用户自动拉黑，以后一键回关不会再回关他们（防止被"骗关注"）
+- 🤖 **GitHub Actions 定时自动运行**（每天一次，自动回关 + 取关）
 - ⚡ 自动检测 API 速率限制并保护
 - 🎨 彩色终端表格输出
 - 🚫 零外部依赖，仅使用 Python 标准库
@@ -67,13 +68,11 @@ python main.py -u <username>
 
 ### 3. 白名单（可选）
 
-有几个用户是你**单方面关注**、不想被列进 "Unfollowers" 也不想被取关/回关的？把它们加入白名单：
+有几个用户是你**单方面关注**、不想被列进 "Unfollowers" 也不想被取关/回关的？把它们加入白名单。
 
-```bash
-cp whitelist.txt.example whitelist.txt
-```
+仓库里已经有一份 `whitelist.txt`，直接用编辑器打开往里加就行，一行一个用户名（可带 `@`，`#` 为注释）：
 
-编辑 `whitelist.txt`，一行一个用户名（可带 `@`，`#` 为注释）：
+> ⚠️ **`whitelist.txt` 是被 git 跟踪的，不要加进 `.gitignore`。** GitHub Actions 的 runner 是全新 checkout，只能看到仓库里有的文件；白名单如果不进仓库，CI 上会**静默失效**（`main.py` 只在显式传 `--whitelist` 时才警告文件不存在），名单里的人会被每日任务取关**并永久拉黑**。加完记得 commit + push，CI 才会拿到。
 
 ```
 some-friend
@@ -139,6 +138,8 @@ python main.py --follow-back --blacklist path/to/blacklist.txt
 | `--blacklist FILE` | 🚫 指定黑名单文件路径（默认读取脚本目录下的 `blacklist.txt`） |
 | `--no-blacklist` | 🚫 `--unfollow` 时不自动把取关用户写入黑名单 |
 
+只要环境变量 `NO_COLOR` 非空，输出就会禁用 ANSI 颜色（[no-color.org](https://no-color.org/) 规范），适合写日志或重定向到文件。
+
 ## 📊 输出示例
 
 ```
@@ -182,25 +183,78 @@ python main.py --follow-back --blacklist path/to/blacklist.txt
 ╰──────────────────────────────────────────╯
 ```
 
+## 🤖 自动运行（GitHub Actions）
+
+不想每天手动跑？仓库里带了 `.github/workflows/follow-sync.yml`，每个**每天 UTC 08:23**（北京时间 16:23）自动执行 `--follow-back --unfollow`，并把更新后的 `blacklist.txt` 提交回仓库。
+
+### 配置步骤
+
+**1. 创建 Personal Access Token**
+
+> ⚠️ 不能用 Actions 自动注入的 `GITHUB_TOKEN` —— 它只有仓库级权限，没有 `user:follow`，调关注接口会返回 403。
+
+二选一：
+
+- **Classic token**：https://github.com/settings/tokens → Generate new token (classic) → 勾选 `user:follow`
+- **Fine-grained token**：https://github.com/settings/personal-access-tokens → 在 **Account permissions** 里找到 **Followers**，设为 **Read and write**
+
+**2. 存为仓库 secret**
+
+仓库 → Settings → Secrets and variables → Actions → New repository secret，名字必须是 **`GH_FOLLOW_TOKEN`**（workflow 里按这个名字引用）。
+
+**3. 关于 workflow 写权限（一般不用改）**
+
+workflow 里已经声明了 `permissions: contents: write`，正常情况下这就够了——仓库的 Workflow permissions 设置是**默认值**，workflow 里的 `permissions` 键可以按需提权，这也是 GitHub 推荐的最小权限做法。
+
+但如果提交黑名单时 `git push` 报 403，按顺序排查：
+1. 看 job 日志开头的 `GITHUB_TOKEN Permissions` 块，确认 `contents` 是不是 `write`
+2. 如果组织策略强制只读，仓库级设置改不动 → 回到 Settings → Actions → General → Workflow permissions 选 **"Read and write permissions"**
+3. fork PR 触发的运行会被强制只读，但本 workflow 走 `schedule` / `workflow_dispatch`，不受影响
+
+### 使用
+
+配置好后，去 Actions → **Follow Sync** → Run workflow，可以先勾上 `dry_run` 试跑一次：
+
+- **勾选 `dry_run`**：只抓取并打印报告，不执行任何关注/取关。用来验证 token 是否有效、权限是否够。
+- **不勾**：全自动执行回关 + 取关（等价于本地 `python main.py --follow-back --unfollow -y`）。
+
+跑完的结果会写进 job 的 **Summary** 页，不用翻日志就能看。日志里也不带颜色（workflow 设了 `NO_COLOR=1`）。
+
+> ⚠️ **`-y` 千万不能省。** `confirm()` 会捕获 `EOFError` 返回 `False`（`main.py:365-367`），所以 CI 里漏了 `-y` **不会报错**，而是「workflow 绿色通过、但一个关注/取关都没执行」——比崩溃更难发现。
+
+### 定时任务的现实约束
+
+1. **cron 用 UTC 时间**，且 GitHub 允许的最小间隔是 5 分钟
+2. **不保证准点**：GitHub 负载高时，定时任务可能延迟几十分钟才触发
+3. **60 天无活动会被自动禁用**：公开仓库的 scheduled workflow 在仓库连续 60 天没有任何活动后会被自动停用，需要去 Actions 页面手动重新启用
+   - 这里有个联动：本 workflow 只在黑名单**有变化**时才产生 commit。如果你 60 天内没被任何人取关，就没有提交、没有活动，可能触发这条自动禁用。届时 GitHub 会发邮件，去 Actions 页面点一下重新启用即可。
+
+另外，全自动模式的风控风险请见下方「注意事项」。
+
 ## ⚠️ 注意事项
 
 - GitHub API 对认证用户限制 **5000 次请求/小时**
 - 每次关注/取关操作间隔 0.5 秒，避免触发速率限制
 - **一键取关是不可逆操作**，请确认后执行（默认会要求确认）
-- Token 请妥善保管，不要提交到 Git（已在 `.gitignore` 中排除）
+- Token 请妥善保管，不要提交到 Git（`.env` 已在 `.gitignore` 中排除）
 - 使用 `--follow-back` / `--unfollow` 需要 Token 有 `user:follow` 权限
+- **⚠️ 风控风险**：GitHub 的 [Acceptable Use Policies](https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies) 将 "following/unfollowing in bulk" 的自动化活动列为 spam 行为。手动偶尔跑一次属于个人工具范畴；挂上每日定时、无人值守地批量回关/取关，在风控视角里性质不同，存在账号被限流或封禁的可能。`--follow-back`（自动回关所有粉丝）尤其容易触发。
+- `blacklist.txt` 会被自动提交回仓库，因此它的内容是**公开可见**的（如果仓库是 public）
+- **⚠️ Actions 条款风险**：GitHub 的 [Additional Product Terms](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features) 规定，GitHub 托管 runner 不得用于「与仓库所属软件项目的生产、测试、部署或发布无关的任何其他活动」。把关注管理机器人挂在 Actions 上跑属于灰色地带。想彻底规避可以改用 VPS + cron/systemd timer。
+- **误伤不可逆**：`--unfollow` 会取关**所有**没回关你的人，而黑名单是**永久**的。GitHub 的 follower 列表有缓存，某人账号被临时限制或短暂取关再回关，都可能让他掉出 `followers` → 被你取关并永久拉黑 → 即使他回关你也不会再被回关。建议定期看一眼黑名单文件，或改用 `--no-blacklist`。
 
 ## 📁 项目结构
 
 ```
 github-follower-diff/
-├── main.py                # 主程序（单文件，包含所有代码）
-├── .env.example           # 环境变量模板
-├── .env                   # 你的配置（不要提交到 Git）
-├── whitelist.txt.example  # 白名单模板
-├── whitelist.txt          # 你的白名单（可选）
-├── blacklist.txt.example  # 黑名单模板
-├── blacklist.txt          # 你的黑名单（--unfollow 自动生成/追加）
+├── main.py                          # 主程序（单文件，包含所有代码）
+├── .github/workflows/follow-sync.yml  # 定时自动执行（每天一次）
+├── .env.example                     # 环境变量模板
+├── .env                             # 你的配置（不要提交到 Git）
+├── whitelist.txt.example            # 白名单模板
+├── whitelist.txt                    # 你的白名单（进 Git，否则 CI 上会静默失效）
+├── blacklist.txt.example            # 黑名单模板
+├── blacklist.txt                    # 黑名单（--unfollow 自动追加；Actions 会提交回仓库）
 ├── .gitignore
 └── README.md
 ```

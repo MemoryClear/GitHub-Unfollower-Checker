@@ -1,0 +1,107 @@
+name: Follow Sync
+
+on:
+  schedule:
+    # 每天 UTC 08:23（北京时间 16:23）。避开整点，减少高峰延迟。
+    - cron: "23 8 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只报告，不执行关注/取关"
+        type: boolean
+        default: false
+
+# 为了把 blacklist.txt push 回仓库。
+# 注意：secret 名不能以 GITHUB_ 开头（GitHub 会拒绝），所以上面用的是
+# GH_FOLLOW_TOKEN，在这里映射成脚本要读的 GITHUB_TOKEN。
+permissions:
+  contents: write
+
+# 防止手动触发和定时任务撞车导致 push 冲突
+concurrency:
+  group: follow-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # 兜底：main.py 触发限流时会 sleep 到配额重置（最长约 1 小时）
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run follow sync
+        # step 级超时：超时只让这一步失败，job 还能继续走到下面的 commit step。
+        # 用 job 级超时会把整个 job 取消，黑名单就存不下来了。
+        timeout-minutes: 30
+        env:
+          # 不能用自动注入的 secrets.GITHUB_TOKEN —— 它是仓库级令牌，
+          # 没有 user:follow 权限，调关注接口会 403。
+          GITHUB_TOKEN: ${{ secrets.GH_FOLLOW_TOKEN }}
+          NO_COLOR: "1"
+          # 非 TTY 下 Python 会缓冲 stdout，不加这个日志会攒到最后才吐出来
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          # 通过 env 传递，避免把表达式直接插进 run 脚本
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -o pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS=""
+            echo "== DRY RUN：只报告，不执行关注/取关 =="
+          else
+            ARGS="--follow-back --unfollow -y"
+            echo "== 全自动：回关 + 取关 =="
+          fi
+          # 注意 -y 不能省：没有它 confirm() 会因 EOF 返回 False，
+          # 结果是 workflow 绿色通过但什么都没做。
+          python main.py $ARGS 2>&1 | tee "$RUNNER_TEMP/run.log"
+
+      - name: Job summary
+        # NO_COLOR=1 已在上面设过，日志是纯文本，直接贴进 summary 即可
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/run.log" ]; then
+            echo '### Follow Sync 报告' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/run.log" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Backup blacklist
+        # push 失败时黑名单会永久丢失（那些用户下轮已不在 following 里，
+        # 不会再被取关，也就永远不会再被写进黑名单）。artifact 做兜底。
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blacklist-${{ github.run_id }}
+          path: blacklist.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Commit blacklist
+        # 即使前面的关注/取关部分失败，也要保存已写入的黑名单
+        if: always()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ ! -f blacklist.txt ]; then
+            echo "没有 blacklist.txt，跳过"
+            exit 0
+          fi
+
+          git add -- blacklist.txt
+          if git diff --staged --quiet; then
+            echo "黑名单无变化，跳过提交"
+            exit 0
+          fi
+
+          git commit -m "chore: update blacklist [skip ci]"
+          # 防止并发 push 导致 non-fast-forward
+          git pull --rebase --autostash origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"

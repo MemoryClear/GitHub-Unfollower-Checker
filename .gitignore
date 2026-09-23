@@ -1,6 +1,10 @@
 .env
-whitelist.txt
-blacklist.txt
+
+# whitelist.txt 和 blacklist.txt 故意不忽略：
+#   - CI runner 是全新 checkout，只能看到仓库里有的文件。白名单不进仓库
+#     就会在 CI 上静默失效，名单里的人会被取关并永久拉黑。
+#   - blacklist.txt 由 follow-sync workflow 每轮跑完 commit 回仓库，
+#     否则 runner 销毁后数据丢失，--follow-back 会重新回关"骗关注"的人。
 __pycache__/
 *.pyc
 .venv/

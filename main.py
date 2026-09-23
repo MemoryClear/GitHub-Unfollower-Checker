@@ -49,6 +49,12 @@ BOLD_BLUE = f"{BOLD}{BLUE}"
 BOLD_CYAN = f"{BOLD}{CYAN}"
 BOLD_YELLOW = f"{BOLD}{YELLOW}"
 
+# NO_COLOR (https://no-color.org/)：设置后禁用所有 ANSI 颜色。
+# CI 里跑时尤其需要，否则日志会混入转义码。
+if os.environ.get("NO_COLOR"):
+    RESET = BOLD = DIM = RED = GREEN = YELLOW = BLUE = CYAN = ""
+    BOLD_RED = BOLD_GREEN = BOLD_BLUE = BOLD_CYAN = BOLD_YELLOW = ""
+
 if os.environ.get("NO_COLOR") or sys.platform == "win32":
     try:
         os.system("")  # Enable VT processing on Windows 10+

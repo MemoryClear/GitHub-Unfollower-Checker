@@ -1,0 +1,14 @@
+# 白名单：一行一个 GitHub 用户名（可带 @ 前缀），# 开头为注释。
+# 这里的用户：
+#   1. 不会出现在 "Unfollowers（我关注但未关注我）" 和 "Fans" 列表中
+#   2. 不会被 --follow-back 回关，也不会被 --unfollow 取关
+#
+# 复制本文件为 whitelist.txt 后即自动生效，无需其他参数。
+#
+# 《本文件会进版本库》：GitHub Actions 上的 runner 是全新 checkout，
+# 只能看到仓库里有的文件。如果本文件不进仓库，CI 上白名单会静默失效，
+# 这里的人会被每日任务取关并永久拉黑。所以它和 blacklist.txt 一样被跟踪。
+#
+# 示例:
+# some-friend
+# @another-user   # 行尾注释也可以
