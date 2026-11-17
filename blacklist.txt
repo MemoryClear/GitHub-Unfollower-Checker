@@ -28,3 +28,4 @@ cansu5806  # 2026-11-06 取关后自动加入
 helallao  # 2026-11-07 取关后自动加入
 buildlabs-io  # 2026-11-16 取关后自动加入
 taroyamada08  # 2026-11-16 取关后自动加入
+sadeeshajayaweera  # 2026-11-17 取关后自动加入
